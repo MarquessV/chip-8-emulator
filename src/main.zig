@@ -1,24 +1,42 @@
 const std = @import("std");
 
+const raylib = @cImport({
+    @cInclude("raylib.h");
+});
+const clap = @import("clap");
+
+const App = @import("app.zig").App;
+
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    const params = comptime clap.parseParamsComptime(
+        \\-h, --help            Display this help and exit.
+        \\-s, --scale <usize>   Scale the rendered output of the 64x32 CHIP-8 display. (default: 10)
+        \\<str>...
+        \\
+    );
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+    var diag = clap.Diagnostic{};
+    var res = clap.parse(clap.Help, &params, clap.parsers.default, .{
+        .diagnostic = &diag,
+    }) catch |err| {
+        // Report useful error and exit
+        diag.report(std.io.getStdErr().writer(), err) catch {};
+        return err;
+    };
+    defer res.deinit();
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+    if (res.args.help != 0)
+        std.debug.print("--help\n", .{});
+    if (res.args.scale) |n|
+        std.debug.print("--scale = {}\n", .{n});
 
-    try bw.flush(); // don't forget to flush!
-}
+    const scale: c_int = @intCast(res.args.scale orelse 10);
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+    if (scale < 1) {
+        std.debug.print("error: scale must be greater than 0\n", .{});
+        return error.InvalidArgument;
+    }
+
+    var app = App.new(.{ .scale = scale });
+    try app.run();
 }
