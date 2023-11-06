@@ -104,6 +104,9 @@ pub const Chip8 = struct {
                 var collision = self.draw_sprite(x, y, sprite);
                 self.registers[0xF] = @intFromBool(collision);
             },
+            .add => |params| {
+                self.registers[params.register] += params.value;
+            },
             .ignored => {},
             else => return error.Unimplemented,
         }
@@ -212,6 +215,10 @@ pub const Chip8 = struct {
         read_registers: u8,
         ignored: void, // Catch-all for NOP and other system instructions we can safely ignore.
 
+        /// Parse an Instruction variant and any parameters from an opcode.
+        ///
+        /// Note: Truncation is safe in this function is safe since we only care about 1 or 2 nibbles of the opcode
+        /// for a particular parameter.
         fn from_opcode(opcode: u16) !Instruction {
             switch ((opcode & 0xF000) >> 12) {
                 0x0 => {
@@ -223,8 +230,27 @@ pub const Chip8 = struct {
                     }
                 },
                 0x1 => return Instruction{ .jump = opcode & 0x0FFF },
-                0x6 => return Instruction{ .set_register = .{ .register = @truncate(opcode >> 8 & 0x0f), .value = @truncate(opcode) } },
+                0x2 => return Instruction{ .call_subroutine = opcode & 0x0FFF },
+                0x3 => return Instruction{ .skip_if_eq = Instruction.parse_register_value(opcode) },
+                0x4 => return Instruction{ .skip_if_ne = Instruction.parse_register_value(opcode) },
+                0x5 => return Instruction{ .skip_if_registers_eq = Instruction.parse_left_right_register(opcode) },
+                0x6 => return Instruction{ .set_register = Instruction.parse_register_value(opcode) },
+                0x7 => return Instruction{ .add = Instruction.parse_register_value(opcode) },
+                0x8 => {
+                    switch (opcode & 0x000F) {
+                        0x0 => return Instruction{ .set_register_to_register = Instruction.parse_left_right_register(opcode) },
+                        0x1 => return Instruction{ .or_registers = Instruction.parse_left_right_register(opcode) },
+                        0x2 => return Instruction{ .and_registers = Instruction.parse_left_right_register(opcode) },
+                        0x3 => return Instruction{ .xor_registers = Instruction.parse_left_right_register(opcode) },
+                        0x4 => return Instruction{ .add_registers = Instruction.parse_left_right_register(opcode) },
+                        0x5 => return Instruction{ .sub_registers = Instruction.parse_left_right_register(opcode) },
+                        else => return error.UnknownOpcode,
+                    }
+                },
+                0x9 => return Instruction{ .skip_if_registers_ne = Instruction.parse_left_right_register(opcode) },
                 0xA => return Instruction{ .set_address_register = opcode & 0x0FFF },
+                0xB => return Instruction{ .jump_plus_register = opcode & 0x0FFF },
+                0xC => return Instruction{ .random = Instruction.parse_register_value(opcode) },
                 0xD => return Instruction{ .draw = .{
                     .x = @truncate((opcode & 0x0F00) >> 8),
                     .y = @truncate((opcode & 0x00F0) >> 4),
@@ -232,6 +258,14 @@ pub const Chip8 = struct {
                 } },
                 else => return error.UnknownOpcode,
             }
+        }
+
+        fn parse_register_value(opcode: u16) struct { register: u8, value: u8 } {
+            return struct { .register = @truncate(opcode >> 8 & 0x0f), .value = @truncate(opcode) };
+        }
+
+        fn parse_left_right_register(opcode: u16) struct { lhs: u8, rhs: u8 } {
+            return struct { .lhs = @truncate(opcode >> 8 & 0x0f), .rhs = @truncate(opcode >> 4 & 0x0f) };
         }
     };
 };
