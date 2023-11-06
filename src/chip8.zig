@@ -24,6 +24,8 @@ pub const Chip8 = struct {
 
     screen: [DISPLAY_HEIGHT][DISPLAY_WIDTH]u1,
 
+    rng: std.rand.Random,
+
     const LOGGER = std.log.scoped(.chip8);
 
     /// Initialize and return a new Chip8 emulator with the ROM at the given path
@@ -31,6 +33,7 @@ pub const Chip8 = struct {
     pub fn load(path: []const u8) !Chip8 {
         LOGGER.debug("Loading ROM from path: {s}", .{path});
         var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        var sfc64 = std.rand.Sfc64.init(@bitCast(std.time.milliTimestamp()));
         var chip = Chip8{
             .memory = undefined,
             .registers = [_]u8{0} ** 16,
@@ -41,6 +44,7 @@ pub const Chip8 = struct {
             .address_register = undefined,
             .keys = undefined, // TODO
             .screen = std.mem.zeroes([DISPLAY_HEIGHT][DISPLAY_WIDTH]u1),
+            .rng = sfc64.random(),
         };
 
         var file = try std.fs.cwd().openFile(path, .{});
@@ -98,11 +102,46 @@ pub const Chip8 = struct {
             .skip_if_registers_eq => |params| {
                 if (self.registers[params.lhs] == self.registers[params.rhs]) self.increment_program_counter();
             },
+            .skip_if_registers_ne => |params| {
+                if (self.registers[params.lhs] != self.registers[params.rhs]) self.increment_program_counter();
+            },
             .set_register => |params| {
                 self.registers[params.register] = params.value;
             },
+            .or_registers => |params| {
+                self.registers[params.lhs] |= self.registers[params.rhs];
+            },
+            .and_registers => |params| {
+                self.registers[params.lhs] &= self.registers[params.rhs];
+            },
+            .xor_registers => |params| {
+                self.registers[params.lhs] ^= self.registers[params.rhs];
+            },
+            .add_registers => |params| {
+                self.registers[params.lhs] += self.registers[params.rhs];
+            },
+            .sub_registers => |params| {
+                self.registers[params.lhs] -= self.registers[params.rhs];
+            },
+            .sub_registers_reverse => |params| {
+                self.registers[params.lhs] = self.registers[params.rhs] - self.registers[params.lhs];
+            },
+            .shift_right => |register| {
+                self.registers[0xF] = self.registers[register] & 1;
+                self.registers[register] >>= 1;
+            },
+            .shift_left => |register| {
+                self.registers[0xF] = (self.registers[register] & 0xF0) >> 4;
+                self.registers[register] <<= 1;
+            },
             .set_address_register => |address| {
                 self.address_register = address;
+            },
+            .jump_plus_register => |amount| {
+                self.program_counter = self.registers[0] + amount;
+            },
+            .random => |params| {
+                self.registers[params.register] = self.rng.int(u8) & params.value;
             },
             .draw => |params| {
                 var x = self.registers[params.x];
@@ -165,13 +204,9 @@ pub const Chip8 = struct {
         xor_registers: RegisterParams,
         add_registers: RegisterParams,
         sub_registers: RegisterParams,
-        shift_right: struct {
-            register: u8,
-        },
+        shift_right: u8,
         sub_registers_reverse: RegisterParams,
-        shift_left: struct {
-            register: u8,
-        },
+        shift_left: u8,
         skip_if_registers_ne: RegisterParams,
         set_address_register: u16,
         jump_plus_register: u16,
@@ -223,6 +258,9 @@ pub const Chip8 = struct {
                         0x3 => return Instruction{ .xor_registers = Instruction.parse_left_right_register(opcode) },
                         0x4 => return Instruction{ .add_registers = Instruction.parse_left_right_register(opcode) },
                         0x5 => return Instruction{ .sub_registers = Instruction.parse_left_right_register(opcode) },
+                        0x6 => return Instruction{ .shift_right = @truncate((opcode & 0x0F00) >> 8) },
+                        0x7 => return Instruction{ .sub_registers_reverse = Instruction.parse_left_right_register(opcode) },
+                        0xE => return Instruction{ .shift_left = @truncate((opcode & 0x0F00) >> 8) },
                         else => return error.UnknownOpcode,
                     }
                 },
