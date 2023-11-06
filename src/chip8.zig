@@ -89,6 +89,15 @@ pub const Chip8 = struct {
             .jump => |address| {
                 self.program_counter = address;
             },
+            .skip_if_eq => |params| {
+                if (self.registers[params.register] == params.value) self.increment_program_counter();
+            },
+            .skip_if_ne => |params| {
+                if (self.registers[params.register] != params.value) self.increment_program_counter();
+            },
+            .skip_if_registers_eq => |params| {
+                if (self.registers[params.lhs] == self.registers[params.rhs]) self.increment_program_counter();
+            },
             .set_register => |params| {
                 self.registers[params.register] = params.value;
             },
@@ -129,74 +138,44 @@ pub const Chip8 = struct {
     }
 
     const Instruction = union(enum) {
+        /// Parameters for instructions that operate on a register using some value.
+        pub const RegisterValueParams = struct {
+            register: u8,
+            value: u8,
+        };
+
+        /// Parameters for instructions that perform an operation between two registers
+        pub const RegisterParams = struct {
+            lhs: u8,
+            rhs: u8,
+        };
+
         clear_display: void,
         return_subroutine: void,
         jump: u16,
         call_subroutine: u16,
-        skip_if_eq: struct {
-            register: u8,
-            value: u8,
-        },
-        skip_if_ne: struct {
-            register: u8,
-            value: u8,
-        },
-        skip_if_registers_eq: struct {
-            lhs: u8,
-            rhs: u8,
-        },
-        set_register: struct {
-            register: u8,
-            value: u8,
-        },
-        add: struct {
-            register: u8,
-            value: u8,
-        },
-        set_register_to_register: struct {
-            lhs: u8,
-            rhs: u8,
-        },
-        or_registers: struct {
-            lhs: u8,
-            rhs: u8,
-        },
-        and_registers: struct {
-            lhs: u8,
-            rhs: u8,
-        },
-        xor_registers: struct {
-            lhs: u8,
-            rhs: u8,
-        },
-        add_registers: struct {
-            lhs: u8,
-            rhs: u8,
-        },
-        sub_registers: struct {
-            lhs: u8,
-            rhs: u8,
-        },
+        skip_if_eq: RegisterValueParams,
+        skip_if_ne: RegisterValueParams,
+        skip_if_registers_eq: RegisterParams,
+        set_register: RegisterValueParams,
+        add: RegisterValueParams,
+        set_register_to_register: RegisterParams,
+        or_registers: RegisterParams,
+        and_registers: RegisterParams,
+        xor_registers: RegisterParams,
+        add_registers: RegisterParams,
+        sub_registers: RegisterParams,
         shift_right: struct {
             register: u8,
         },
-        sub_registers_reverse: struct {
-            lhs: u8,
-            rhs: u8,
-        },
+        sub_registers_reverse: RegisterParams,
         shift_left: struct {
             register: u8,
         },
-        skip_if_registers_ne: struct {
-            lhs: u8,
-            rhs: u8,
-        },
+        skip_if_registers_ne: RegisterParams,
         set_address_register: u16,
         jump_plus_register: u16,
-        random: struct {
-            register: u8,
-            value: u8,
-        },
+        random: RegisterValueParams,
         draw: struct {
             x: u8,
             y: u8,
@@ -260,12 +239,12 @@ pub const Chip8 = struct {
             }
         }
 
-        fn parse_register_value(opcode: u16) struct { register: u8, value: u8 } {
-            return struct { .register = @truncate(opcode >> 8 & 0x0f), .value = @truncate(opcode) };
+        fn parse_register_value(opcode: u16) RegisterValueParams {
+            return .{ .register = @truncate(opcode >> 8 & 0x0f), .value = @truncate(opcode) };
         }
 
-        fn parse_left_right_register(opcode: u16) struct { lhs: u8, rhs: u8 } {
-            return struct { .lhs = @truncate(opcode >> 8 & 0x0f), .rhs = @truncate(opcode >> 4 & 0x0f) };
+        fn parse_left_right_register(opcode: u16) RegisterParams {
+            return .{ .lhs = @truncate(opcode >> 8 & 0x0f), .rhs = @truncate(opcode >> 4 & 0x0f) };
         }
     };
 };
