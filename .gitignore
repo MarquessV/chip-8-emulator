@@ -2,5 +2,8 @@
 zig-cache/
 zig-out/
 
+# Local configuration
+zls.json
+
 # ROMs for testing. Can't redistribute these :).
 roms
