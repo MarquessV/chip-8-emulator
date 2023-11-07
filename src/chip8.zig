@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const Stack = @import("stack.zig").Stack;
+
 pub const Error = error{
     UnknownOpcode,
     Unimplemented,
@@ -15,7 +17,7 @@ pub const Chip8 = struct {
     address_register: u16,
 
     program_counter: u16,
-    stack: std.ArrayList(u16),
+    stack: Stack(u16, 16),
 
     delay_timer: u8,
     sound_timer: u8,
@@ -32,13 +34,12 @@ pub const Chip8 = struct {
     /// loaded into memory.
     pub fn load(path: []const u8) !Chip8 {
         LOGGER.debug("Loading ROM from path: {s}", .{path});
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
         var sfc64 = std.rand.Sfc64.init(@bitCast(std.time.milliTimestamp()));
         var chip = Chip8{
             .memory = undefined,
             .registers = [_]u8{0} ** 16,
             .program_counter = 0x200,
-            .stack = std.ArrayList(u16).init(gpa.allocator()),
+            .stack = Stack(u16, 16).init(),
             .delay_timer = 0,
             .sound_timer = 0,
             .address_register = undefined,
@@ -93,6 +94,14 @@ pub const Chip8 = struct {
             .jump => |address| {
                 self.program_counter = address;
             },
+            .call_subroutine => |address| {
+                try self.stack.push(self.program_counter);
+                self.program_counter = address;
+            },
+            .return_subroutine => {
+                const address = try self.stack.pop();
+                self.program_counter = address;
+            },
             .skip_if_eq => |params| {
                 if (self.registers[params.register] == params.value) self.increment_program_counter();
             },
@@ -116,6 +125,10 @@ pub const Chip8 = struct {
             },
             .xor_registers => |params| {
                 self.registers[params.lhs] ^= self.registers[params.rhs];
+            },
+            .add => |params| {
+                const result = @addWithOverflow(self.registers[params.register], params.value);
+                self.registers[params.register] = result[0];
             },
             .add_registers => |params| {
                 const result = @addWithOverflow(self.registers[params.lhs], self.registers[params.rhs]);
@@ -143,6 +156,9 @@ pub const Chip8 = struct {
             .set_address_register => |address| {
                 self.address_register = address;
             },
+            .set_register_to_register => |params| {
+                self.registers[params.lhs] = self.registers[params.rhs];
+            },
             .jump_plus_register => |amount| {
                 self.program_counter = self.registers[0] + amount;
             },
@@ -158,9 +174,11 @@ pub const Chip8 = struct {
                 var collision = self.draw_sprite(x, y, sprite);
                 self.registers[0xF] = @intFromBool(collision);
             },
-            .add => |params| {
-                const result = @addWithOverflow(self.registers[params.register], params.value);
-                self.registers[params.register] = result[0];
+            .store_registers => |register| {
+                @memcpy(self.memory[self.address_register .. self.address_register + register], self.registers[0..register]);
+            },
+            .read_registers => |register| {
+                @memcpy(self.registers[0..register], self.memory[self.address_register .. self.address_register + register]);
             },
             .ignored => {},
             else => return error.Unimplemented,
