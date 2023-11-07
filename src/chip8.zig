@@ -174,10 +174,10 @@ pub const Chip8 = struct {
                 var collision = self.draw_sprite(x, y, sprite);
                 self.registers[0xF] = @intFromBool(collision);
             },
-            .store_registers => |register| {
+            .dump_registers => |register| {
                 @memcpy(self.memory[self.address_register .. self.address_register + register], self.registers[0..register]);
             },
-            .read_registers => |register| {
+            .load_registers => |register| {
                 @memcpy(self.registers[0..register], self.memory[self.address_register .. self.address_register + register]);
             },
             .ignored => {},
@@ -251,8 +251,8 @@ pub const Chip8 = struct {
         add_to_address_register: u8,
         set_address_register_to_sprite: u8,
         store_binary_coded_decimal: u8,
-        store_registers: u8,
-        read_registers: u8,
+        dump_registers: u8,
+        load_registers: u8,
         ignored: void, // Catch-all for NOP and other system instructions we can safely ignore.
 
         /// Parse an Instruction variant and any parameters from an opcode.
@@ -299,6 +299,27 @@ pub const Chip8 = struct {
                     .y = @truncate((opcode & 0x00F0) >> 4),
                     .height = @truncate(opcode & 0x000F),
                 } },
+                0xE => {
+                    switch (opcode & 0x00FF) {
+                        0x9E => return Instruction{ .skip_if_key_pressed = @truncate((opcode & 0x0F00) >> 8) },
+                        0xA1 => return Instruction{ .skip_if_key_not_pressed = @truncate((opcode & 0x0F00) >> 8) },
+                        else => return error.UnknownOpcode,
+                    }
+                },
+                0xF => {
+                    switch (opcode & 0x00FF) {
+                        0x07 => return Instruction{ .set_register_to_delay_timer = @truncate((opcode & 0x0F00) >> 8) },
+                        0x0A => return Instruction{ .wait_for_key_press = @truncate((opcode & 0x0F00) >> 8) },
+                        0x15 => return Instruction{ .set_delay_timer = @truncate((opcode & 0x0F00) >> 8) },
+                        0x18 => return Instruction{ .set_sound_timer = @truncate((opcode & 0x0F00) >> 8) },
+                        0x1E => return Instruction{ .add_to_address_register = @truncate((opcode & 0x0F00) >> 8) },
+                        0x29 => return Instruction{ .set_address_register_to_sprite = @truncate((opcode & 0x0F00) >> 8) },
+                        0x33 => return Instruction{ .store_binary_coded_decimal = @truncate((opcode & 0x0F00) >> 8) },
+                        0x55 => return Instruction{ .dump_registers = @truncate((opcode & 0x0F00) >> 8) },
+                        0x65 => return Instruction{ .load_registers = @truncate((opcode & 0x0F00) >> 8) },
+                        else => return error.UnknownOpcode,
+                    }
+                },
                 else => return error.UnknownOpcode,
             }
         }
