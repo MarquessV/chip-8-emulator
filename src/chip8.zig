@@ -118,13 +118,19 @@ pub const Chip8 = struct {
                 self.registers[params.lhs] ^= self.registers[params.rhs];
             },
             .add_registers => |params| {
-                self.registers[params.lhs] += self.registers[params.rhs];
+                const result = @addWithOverflow(self.registers[params.lhs], self.registers[params.rhs]);
+                self.registers[params.lhs] = result[0];
+                self.registers[0xF] = result[1];
             },
             .sub_registers => |params| {
-                self.registers[params.lhs] -= self.registers[params.rhs];
+                const result = @subWithOverflow(self.registers[params.lhs], self.registers[params.rhs]);
+                self.registers[params.lhs] = result[0];
+                self.registers[0xF] = result[1];
             },
             .sub_registers_reverse => |params| {
-                self.registers[params.lhs] = self.registers[params.rhs] - self.registers[params.lhs];
+                const result = @subWithOverflow(self.registers[params.rhs], self.registers[params.lhs]);
+                self.registers[params.lhs] = result[0];
+                self.registers[0xF] = result[1];
             },
             .shift_right => |register| {
                 self.registers[0xF] = self.registers[register] & 1;
@@ -153,7 +159,8 @@ pub const Chip8 = struct {
                 self.registers[0xF] = @intFromBool(collision);
             },
             .add => |params| {
-                self.registers[params.register] += params.value;
+                const result = @addWithOverflow(self.registers[params.register], params.value);
+                self.registers[params.register] = result[0];
             },
             .ignored => {},
             else => return error.Unimplemented,
@@ -163,11 +170,12 @@ pub const Chip8 = struct {
     fn draw_sprite(self: *Chip8, x: u8, y: u8, sprite: []u8) bool {
         LOGGER.debug("Drawing sprite at ({d}, {d}), height: {d}", .{ x, y, sprite.len });
         var collision = false;
-        const y_max = y + sprite.len;
-        const x_max = x + SPRITE_WIDTH;
+        // TODO: What do we do when the sprite is partially off the screen? This code will clip them, but is that right?
+        const y_max = @min(y + sprite.len, DISPLAY_HEIGHT);
+        const x_max = @min(x + SPRITE_WIDTH, DISPLAY_WIDTH);
         for (self.screen[y..y_max], y..y_max, sprite) |row, row_index, sprite_row| {
-            for (row[x..x_max], x..x_max, 0..8) |curr_pixel, col_index, shift_amount| {
-                const pixel = sprite_row >> (@truncate(7 - shift_amount));
+            for (row[x..x_max], x..x_max, 0..x_max - x) |curr_pixel, col_index, shift_amount| {
+                const pixel = (sprite_row >> @truncate(7 - shift_amount)) & 1;
                 if (pixel == 0) continue;
                 if (curr_pixel == 1) collision = true;
                 self.screen[row_index][col_index] ^= @truncate(pixel);
