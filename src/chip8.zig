@@ -153,6 +153,9 @@ pub const Chip8 = struct {
                 self.registers[0xF] = (self.registers[register] & 0xF0) >> 4;
                 self.registers[register] <<= 1;
             },
+            .add_to_address_register => |register| {
+                self.address_register += self.registers[register];
+            },
             .set_address_register => |address| {
                 self.address_register = address;
             },
@@ -174,11 +177,20 @@ pub const Chip8 = struct {
                 var collision = self.draw_sprite(x, y, sprite);
                 self.registers[0xF] = @intFromBool(collision);
             },
+            // The dump and load register instructions have conflicting specifications
+            // depending on where you look. Some sources say I should be incremented by
+            // X, X+1, or not at all.
             .dump_registers => |register| {
-                @memcpy(self.memory[self.address_register .. self.address_register + register], self.registers[0..register]);
+                @memcpy(self.memory[self.address_register .. self.address_register + register + 1], self.registers[0 .. register + 1]);
             },
             .load_registers => |register| {
-                @memcpy(self.registers[0..register], self.memory[self.address_register .. self.address_register + register]);
+                @memcpy(self.registers[0 .. register + 1], self.memory[self.address_register .. self.address_register + register + 1]);
+            },
+            .store_binary_coded_decimal => |register| {
+                var d = self.registers[register];
+                self.memory[self.address_register] = d / 100;
+                self.memory[self.address_register + 1] = (d / 10) % 10;
+                self.memory[self.address_register + 2] = d % 10;
             },
             .ignored => {},
             else => return error.Unimplemented,
@@ -257,7 +269,7 @@ pub const Chip8 = struct {
 
         /// Parse an Instruction variant and any parameters from an opcode.
         ///
-        /// Note: Truncation is safe in this function is safe since we only care about 1 or 2 nibbles of the opcode
+        /// Note: Truncation in this function is safe since we only care about 1 or 2 nibbles of the opcode
         /// for a particular parameter.
         fn from_opcode(opcode: u16) !Instruction {
             switch ((opcode & 0xF000) >> 12) {
