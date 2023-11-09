@@ -138,20 +138,24 @@ pub const Chip8 = struct {
             .sub_registers => |params| {
                 const result = @subWithOverflow(self.registers[params.lhs], self.registers[params.rhs]);
                 self.registers[params.lhs] = result[0];
-                self.registers[0xF] = result[1];
+                self.registers[0xF] = 1 ^ result[1];
             },
             .sub_registers_reverse => |params| {
                 const result = @subWithOverflow(self.registers[params.rhs], self.registers[params.lhs]);
                 self.registers[params.lhs] = result[0];
-                self.registers[0xF] = result[1];
+                self.registers[0xF] = 1 ^ result[1];
             },
-            .shift_right => |register| {
-                self.registers[0xF] = self.registers[register] & 1;
-                self.registers[register] >>= 1;
+            .shift_right => |params| {
+                // We temporarily store the flag because it could be one of the registers
+                // in params. If it is, we don't want to overwrite the value before it is used.
+                const flag = self.registers[params.rhs] & 0x1;
+                self.registers[params.lhs] >>= 1;
+                self.registers[0xF] = flag;
             },
-            .shift_left => |register| {
-                self.registers[0xF] = (self.registers[register] & 0xF0) >> 4;
-                self.registers[register] <<= 1;
+            .shift_left => |params| {
+                const flag = self.registers[params.lhs] >> 7;
+                self.registers[params.lhs] <<= 1;
+                self.registers[0xF] = flag;
             },
             .add_to_address_register => |register| {
                 self.address_register += self.registers[register];
@@ -242,9 +246,9 @@ pub const Chip8 = struct {
         xor_registers: RegisterParams,
         add_registers: RegisterParams,
         sub_registers: RegisterParams,
-        shift_right: u8,
+        shift_right: RegisterParams,
         sub_registers_reverse: RegisterParams,
-        shift_left: u8,
+        shift_left: RegisterParams,
         skip_if_registers_ne: RegisterParams,
         set_address_register: u16,
         jump_plus_register: u16,
@@ -296,9 +300,9 @@ pub const Chip8 = struct {
                         0x3 => return Instruction{ .xor_registers = Instruction.parse_left_right_register(opcode) },
                         0x4 => return Instruction{ .add_registers = Instruction.parse_left_right_register(opcode) },
                         0x5 => return Instruction{ .sub_registers = Instruction.parse_left_right_register(opcode) },
-                        0x6 => return Instruction{ .shift_right = @truncate((opcode & 0x0F00) >> 8) },
+                        0x6 => return Instruction{ .shift_right = parse_left_right_register(opcode) },
                         0x7 => return Instruction{ .sub_registers_reverse = Instruction.parse_left_right_register(opcode) },
-                        0xE => return Instruction{ .shift_left = @truncate((opcode & 0x0F00) >> 8) },
+                        0xE => return Instruction{ .shift_left = parse_left_right_register(opcode) },
                         else => return error.UnknownOpcode,
                     }
                 },
