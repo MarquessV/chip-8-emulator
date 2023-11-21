@@ -12,6 +12,14 @@ pub const Chip8 = struct {
     pub const DISPLAY_HEIGHT: usize = 32;
     pub const SPRITE_WIDTH: usize = 8;
 
+    /// The type of Chip-8 system this emulator is emulating.
+    pub const SystemType = enum {
+        Chip8,
+        SuperChip,
+        XOChip,
+        SuperChipLegacy,
+    };
+
     memory: [4096]u8 = undefined,
     registers: [16]u8,
     address_register: u16,
@@ -21,18 +29,20 @@ pub const Chip8 = struct {
 
     delay_timer: u8,
     sound_timer: u8,
+    last_timer_update: i64,
 
-    keys: [16]u8,
+    keys: [16]bool,
 
     screen: [DISPLAY_HEIGHT][DISPLAY_WIDTH]u1,
 
     rng: std.rand.Random,
+    system: SystemType,
 
     const LOGGER = std.log.scoped(.chip8);
 
     /// Initialize and return a new Chip8 emulator with the ROM at the given path
     /// loaded into memory.
-    pub fn load(path: []const u8) !Chip8 {
+    pub fn load(path: []const u8, config: struct { system: SystemType = SystemType.Chip8 }) !Chip8 {
         LOGGER.debug("Loading ROM from path: {s}", .{path});
         var sfc64 = std.rand.Sfc64.init(@bitCast(std.time.milliTimestamp()));
         var chip = Chip8{
@@ -42,10 +52,12 @@ pub const Chip8 = struct {
             .stack = Stack(u16, 16).init(),
             .delay_timer = 0,
             .sound_timer = 0,
+            .last_timer_update = std.time.milliTimestamp(),
             .address_register = undefined,
             .keys = undefined, // TODO
             .screen = std.mem.zeroes([DISPLAY_HEIGHT][DISPLAY_WIDTH]u1),
             .rng = sfc64.random(),
+            .system = config.system,
         };
 
         var file = try std.fs.cwd().openFile(path, .{});
@@ -59,6 +71,7 @@ pub const Chip8 = struct {
 
     /// Fetch and execute a single opcdode.
     pub fn cycle(self: *Chip8) !void {
+        self.decrement_timers();
         const opcode = self.fetch_opcode();
         const instruction = Instruction.from_opcode(opcode) catch |err| {
             LOGGER.err("Error decoding opcode {x}: {any}", .{ opcode, err });
@@ -119,12 +132,21 @@ pub const Chip8 = struct {
             },
             .or_registers => |params| {
                 self.registers[params.lhs] |= self.registers[params.rhs];
+                if (self.system == SystemType.Chip8) {
+                    self.registers[0xF] = 0;
+                }
             },
             .and_registers => |params| {
                 self.registers[params.lhs] &= self.registers[params.rhs];
+                if (self.system == SystemType.Chip8) {
+                    self.registers[0xF] = 0;
+                }
             },
             .xor_registers => |params| {
                 self.registers[params.lhs] ^= self.registers[params.rhs];
+                if (self.system == SystemType.Chip8) {
+                    self.registers[0xF] = 0;
+                }
             },
             .add => |params| {
                 const result = @addWithOverflow(self.registers[params.register], params.value);
@@ -186,9 +208,15 @@ pub const Chip8 = struct {
             // X, X+1, or not at all.
             .dump_registers => |register| {
                 @memcpy(self.memory[self.address_register .. self.address_register + register + 1], self.registers[0 .. register + 1]);
+                if (self.system == SystemType.Chip8) {
+                    self.address_register += register + 1;
+                }
             },
             .load_registers => |register| {
                 @memcpy(self.registers[0 .. register + 1], self.memory[self.address_register .. self.address_register + register + 1]);
+                if (self.system == SystemType.Chip8) {
+                    self.address_register += register + 1;
+                }
             },
             .store_binary_coded_decimal => |register| {
                 var d = self.registers[register];
@@ -196,18 +224,50 @@ pub const Chip8 = struct {
                 self.memory[self.address_register + 1] = (d / 10) % 10;
                 self.memory[self.address_register + 2] = d % 10;
             },
+            .set_delay_timer => |value| {
+                self.delay_timer = value;
+            },
+            .set_register_to_delay_timer => |register| {
+                self.registers[register] = self.delay_timer;
+            },
+            .set_sound_timer => |value| {
+                self.sound_timer = value;
+            },
+            .skip_if_key_pressed => |register| {
+                if (self.keys[self.registers[register]]) self.increment_program_counter();
+            },
+            .skip_if_key_not_pressed => |register| {
+                if (!self.keys[self.registers[register]]) self.increment_program_counter();
+            },
+            .wait_for_key_press => |register| {
+                for (self.keys, 0..) |key, i| {
+                    if (key) {
+                        self.registers[register] = @truncate(i);
+                        return;
+                    }
+                }
+                self.program_counter -= 2; // No key pressed, repeat this instruction.
+            },
+            .set_address_register_to_sprite => |register| {
+                _ = register;
+                return error.Unimplemented;
+            },
             .ignored => {},
-            else => return error.Unimplemented,
         }
     }
 
     fn draw_sprite(self: *Chip8, x: u8, y: u8, sprite: []u8) bool {
         LOGGER.debug("Drawing sprite at ({d}, {d}), height: {d}", .{ x, y, sprite.len });
+        if (y >= DISPLAY_HEIGHT or x > DISPLAY_WIDTH) {
+            LOGGER.debug("Sprite is off the screen. Not drawing.", .{});
+            return false;
+        }
         var collision = false;
         // TODO: What do we do when the sprite is partially off the screen? This code will clip them, but is that right?
         const y_max = @min(y + sprite.len, DISPLAY_HEIGHT);
         const x_max = @min(x + SPRITE_WIDTH, DISPLAY_WIDTH);
-        for (self.screen[y..y_max], y..y_max, sprite) |row, row_index, sprite_row| {
+        const sprite_max = @min(y_max - y, sprite.len);
+        for (self.screen[y..y_max], y..y_max, sprite[0..sprite_max]) |row, row_index, sprite_row| {
             for (row[x..x_max], x..x_max, 0..x_max - x) |curr_pixel, col_index, shift_amount| {
                 const pixel = (sprite_row >> @truncate(7 - shift_amount)) & 1;
                 if (pixel == 0) continue;
@@ -216,6 +276,15 @@ pub const Chip8 = struct {
             }
         }
         return collision;
+    }
+
+    fn decrement_timers(self: *Chip8) void {
+        const current_time = std.time.milliTimestamp();
+        if (current_time - self.last_timer_update < 16) return;
+        LOGGER.debug("Decrementing timers. Delay: {d}, Sound: {d}, Timestamp Diff: {d}", .{ self.delay_timer, self.sound_timer, current_time - self.last_timer_update });
+        if (self.sound_timer > 0) self.sound_timer -= 1;
+        if (self.delay_timer > 0) self.delay_timer -= 1;
+        self.last_timer_update = current_time;
     }
 
     const Instruction = union(enum) {
